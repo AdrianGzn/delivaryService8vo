@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"deliveryService/handlers"
-	"deliveryService/middleware"
 	"deliveryService/models"
 	"deliveryService/sse"
 
@@ -15,6 +14,7 @@ import (
 )
 
 func main() {
+	// Inicializar base de datos SQLite
 	db, err := sql.Open("sqlite3", "./delivery.db")
 	if err != nil {
 		log.Fatal(err)
@@ -27,42 +27,41 @@ func main() {
 		log.Fatal(err)
 	}
 
-	
 	sseManager := sse.NewSSEManager()
-	authMiddleware := &middleware.AuthMiddleware{}
 
 	
 	userHandler := &handlers.UserHandler{DB: db}
 	orderHandler := &handlers.OrderHandler{DB: db, SSEManager: sseManager}
-	loginHandler := &handlers.LoginHandler{DB: db, JWTSecret: "tu-secreto-super-seguro"}
+	loginHandler := &handlers.LoginHandler{DB: db}
 
+	
 	r := mux.NewRouter()
-	// Rutas públicas
-	r.HandleFunc("/api/login", loginHandler.Login).Methods("POST")
-	r.HandleFunc("/api/register", loginHandler.Register).Methods("POST")
-	
-	// Ruta SSE (requiere autenticación)
-	r.HandleFunc("/api/sse", authMiddleware.Authenticate(sseManager.SSEHandler, "customer", "delivery")).Methods("GET")
 
-	// API Routes
+	// login/registro
+	r.HandleFunc("/login", loginHandler.Login).Methods("POST")
+	r.HandleFunc("/register", loginHandler.Register).Methods("POST")
+	
+	// Ruta SSE
+	r.HandleFunc("/sse", sseManager.SSEHandler).Methods("GET")
+
 	api := r.PathPrefix("/api").Subrouter()
-
-	// User routes (protegidas)
-	api.HandleFunc("/users", authMiddleware.Authenticate(userHandler.CreateUser, "customer", "delivery")).Methods("POST")
-	api.HandleFunc("/users", authMiddleware.Authenticate(userHandler.GetAllUsers, "customer", "delivery")).Methods("GET")
-	api.HandleFunc("/users/{id}", authMiddleware.Authenticate(userHandler.GetUser, "customer", "delivery")).Methods("GET")
-	api.HandleFunc("/users/{id}", authMiddleware.Authenticate(userHandler.UpdateUser, "customer", "delivery")).Methods("PUT")
-	api.HandleFunc("/users/{id}", authMiddleware.Authenticate(userHandler.DeleteUser, "customer", "delivery")).Methods("DELETE")
-
-	// Order routes (protegidas)
-	api.HandleFunc("/orders", authMiddleware.Authenticate(orderHandler.CreateOrder, "customer")).Methods("POST")
-	api.HandleFunc("/orders", authMiddleware.Authenticate(orderHandler.GetUserOrders, "customer", "delivery")).Methods("GET")
-	api.HandleFunc("/orders/{id}", authMiddleware.Authenticate(orderHandler.GetOrder, "customer", "delivery")).Methods("GET")
-	api.HandleFunc("/orders/{id}/status", authMiddleware.Authenticate(orderHandler.UpdateOrderStatus, "delivery")).Methods("PATCH")
-	api.HandleFunc("/orders/{id}/assign", authMiddleware.Authenticate(orderHandler.AssignDelivery, "delivery")).Methods("POST")
-	api.HandleFunc("/orders/{id}", authMiddleware.Authenticate(orderHandler.DeleteOrder, "customer")).Methods("DELETE")
-
 	
-	log.Println("Servidor iniciado en :8080")
+	// User routes
+	api.HandleFunc("/users", userHandler.CreateUser).Methods("POST")
+	api.HandleFunc("/users", userHandler.GetAllUsers).Methods("GET")
+	api.HandleFunc("/users/{id}", userHandler.GetUser).Methods("GET")
+	api.HandleFunc("/users/{id}", userHandler.UpdateUser).Methods("PUT")
+	api.HandleFunc("/users/{id}", userHandler.DeleteUser).Methods("DELETE")
+
+	// Order routes
+	api.HandleFunc("/orders", orderHandler.CreateOrder).Methods("POST")
+	api.HandleFunc("/orders", orderHandler.GetAllOrders).Methods("GET")
+	api.HandleFunc("/orders/user/{userId}", orderHandler.GetUserOrders).Methods("GET")
+	api.HandleFunc("/orders/{id}", orderHandler.GetOrder).Methods("GET")
+	api.HandleFunc("/orders/{id}/status", orderHandler.UpdateOrderStatus).Methods("PATCH")
+	api.HandleFunc("/orders/{id}/assign", orderHandler.AssignDelivery).Methods("POST")
+	api.HandleFunc("/orders/{id}", orderHandler.DeleteOrder).Methods("DELETE")
+
+	log.Println("Servidor iniciado en :8080 (modo público - sin autenticación)")
 	log.Fatal(http.ListenAndServe(":8080", r))
 }

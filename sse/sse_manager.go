@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"deliveryService/models"
@@ -21,17 +22,16 @@ func NewSSEManager() *SSEManager {
 	}
 }
 
-// Registrar un nuevo cliente SSE
 func (m *SSEManager) RegisterClient(userId int) chan []byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	
-	ch := make(chan []byte, 10) // Buffer para evitar bloqueos
+	ch := make(chan []byte, 10)
 	m.clients[userId] = ch
+	log.Printf("Cliente %d registrado para SSE", userId)
 	return ch
 }
 
-// Eliminar un cliente
 func (m *SSEManager) UnregisterClient(userId int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -39,10 +39,10 @@ func (m *SSEManager) UnregisterClient(userId int) {
 	if ch, exists := m.clients[userId]; exists {
 		close(ch)
 		delete(m.clients, userId)
+		log.Printf("Cliente %d desconectado de SSE", userId)
 	}
 }
 
-// Enviar notificación a un usuario específico
 func (m *SSEManager) NotifyUser(userId int, event string, data interface{}) error {
 	m.mu.RLock()
 	ch, exists := m.clients[userId]
@@ -65,9 +65,9 @@ func (m *SSEManager) NotifyUser(userId int, event string, data interface{}) erro
 		return err
 	}
 
-	// Enviar sin bloquear
 	select {
 	case ch <- jsonData:
+		log.Printf("Notificación enviada a usuario %d: %s", userId, event)
 	default:
 		log.Printf("Buffer lleno para usuario %d, mensaje descartado", userId)
 	}
@@ -75,26 +75,55 @@ func (m *SSEManager) NotifyUser(userId int, event string, data interface{}) erro
 	return nil
 }
 
-// Enviar notificación de actualización de orden
 func (m *SSEManager) NotifyOrderUpdate(order *models.Order) {
-	// Notificar al cliente que hizo el pedido
 	m.NotifyUser(order.UserID, "order_update", order)
 	
-	// Si hay un repartidor asignado, también notificarlo
+	
 	if order.DeliveryID != nil {
 		m.NotifyUser(*order.DeliveryID, "order_update", order)
+	}
+	
+}
+
+func (m *SSEManager) Broadcast(event string, data interface{}) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	message := struct {
+		Event string      `json:"event"`
+		Data  interface{} `json:"data"`
+	}{
+		Event: event,
+		Data:  data,
+	}
+	
+	jsonData, _ := json.Marshal(message)
+	
+	for userId, ch := range m.clients {
+		select {
+		case ch <- jsonData:
+			log.Printf("Broadcast enviado a usuario %d", userId)
+		default:
+			log.Printf("Buffer lleno para usuario %d en broadcast", userId)
+		}
 	}
 }
 
 
 func (m *SSEManager) SSEHandler(w http.ResponseWriter, r *http.Request) {
-	// Obtener userId del contexto (deberías setearlo en el middleware de auth)
-	userId, ok := r.Context().Value("user_id").(int)
-	if !ok {
-		http.Error(w, "No autorizado", http.StatusUnauthorized)
+	userIdStr := r.URL.Query().Get("userId")
+	if userIdStr == "" {
+		http.Error(w, "Se requiere userId en la query string", http.StatusBadRequest)
+		return
+	}
+	
+	userId, err := strconv.Atoi(userIdStr)
+	if err != nil {
+		http.Error(w, "userId debe ser un número válido", http.StatusBadRequest)
 		return
 	}
 
+	
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -103,13 +132,17 @@ func (m *SSEManager) SSEHandler(w http.ResponseWriter, r *http.Request) {
 	ch := m.RegisterClient(userId)
 	defer m.UnregisterClient(userId)
 
-	fmt.Fprintf(w, "event: connected\ndata: {\"message\":\"Conectado al servicio de notificaciones\"}\n\n")
+	
+	fmt.Fprintf(w, "event: connected\ndata: {\"userId\":%d,\"message\":\"Conectado al servicio de notificaciones\"}\n\n", userId)
 	w.(http.Flusher).Flush()
 
-	
+	log.Printf("Usuario %d conectado a SSE", userId)
+
+	// Mantener conexión abierta
 	for {
 		select {
 		case <-r.Context().Done():
+			log.Printf("Conexión SSE cerrada para usuario %d", userId)
 			return
 		case msg, ok := <-ch:
 			if !ok {

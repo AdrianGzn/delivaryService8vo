@@ -25,31 +25,28 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Obtener userId del contexto (usuario autenticado)
-	userId, ok := r.Context().Value("user_id").(int)
-	if !ok {
-		http.Error(w, "Usuario no autenticado", http.StatusUnauthorized)
+	
+	if order.Title == "" || order.Description == "" || order.EstablishmentName == "" {
+		http.Error(w, "Faltan campos requeridos", http.StatusBadRequest)
 		return
 	}
 
-	// Validar que el rol sea customer (esto debería hacerse en middleware)
-	role, _ := r.Context().Value("user_role").(string)
-	if role != "customer" {
-		http.Error(w, "Solo los clientes pueden crear órdenes", http.StatusForbidden)
-		return
+	
+	if order.UserID == 0 {
+		order.UserID = 1
 	}
 
-	order.UserID = userId
 	order.Status = "pending"
 	order.CreatedAt = time.Now()
 	order.UpdatedAt = time.Now()
 
 	result, err := h.DB.Exec(
 		`INSERT INTO orders (title, description, status, establishmentName, 
-			establishmentAddress, price, user_id, created_at, updated_at) 
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			establishmentAddress, price, user_id, delivery_id, created_at, updated_at) 
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		order.Title, order.Description, order.Status, order.EstablishmentName,
-		order.EstablishmentAddr, order.Price, order.UserID, order.CreatedAt, order.UpdatedAt,
+		order.EstablishmentAddr, order.Price, order.UserID, order.DeliveryID, 
+		order.CreatedAt, order.UpdatedAt,
 	)
 	if err != nil {
 		http.Error(w, "Error al crear orden: "+err.Error(), http.StatusInternalServerError)
@@ -59,12 +56,76 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	id, _ := result.LastInsertId()
 	order.ID = int(id)
 
-	// Notificar al cliente que su orden fue creada
+	// Notificar al cliente
 	h.SSEManager.NotifyOrderUpdate(&order)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(order)
+}
+
+func (h *OrderHandler) GetAllOrders(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.DB.Query(`
+		SELECT id, title, description, status, establishmentName, 
+			   establishmentAddress, price, user_id, delivery_id, created_at, updated_at 
+		FROM orders ORDER BY created_at DESC`)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var orders []models.Order
+	for rows.Next() {
+		var order models.Order
+		err := rows.Scan(&order.ID, &order.Title, &order.Description, &order.Status,
+			&order.EstablishmentName, &order.EstablishmentAddr, &order.Price,
+			&order.UserID, &order.DeliveryID, &order.CreatedAt, &order.UpdatedAt)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		orders = append(orders, order)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(orders)
+}
+
+func (h *OrderHandler) GetUserOrders(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userId, err := strconv.Atoi(vars["userId"])
+	if err != nil {
+		http.Error(w, "userId inválido", http.StatusBadRequest)
+		return
+	}
+
+	rows, err := h.DB.Query(`
+		SELECT id, title, description, status, establishmentName, 
+			   establishmentAddress, price, user_id, delivery_id, created_at, updated_at 
+		FROM orders WHERE user_id = ? OR delivery_id = ?
+		ORDER BY created_at DESC`, userId, userId)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var orders []models.Order
+	for rows.Next() {
+		var order models.Order
+		err := rows.Scan(&order.ID, &order.Title, &order.Description, &order.Status,
+			&order.EstablishmentName, &order.EstablishmentAddr, &order.Price,
+			&order.UserID, &order.DeliveryID, &order.CreatedAt, &order.UpdatedAt)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		orders = append(orders, order)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(orders)
 }
 
 func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
@@ -92,15 +153,6 @@ func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verificar que el usuario tenga permiso para ver esta orden
-	userId := r.Context().Value("user_id").(int)
-	role := r.Context().Value("user_role").(string)
-
-	if role != "delivery" && order.UserID != userId {
-		http.Error(w, "No tiene permiso para ver esta orden", http.StatusForbidden)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(order)
 }
@@ -115,6 +167,7 @@ func (h *OrderHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request)
 
 	var updateData struct {
 		Status string `json:"status"`
+		UserID int    `json:"userId"`
 	}
 	err = json.NewDecoder(r.Body).Decode(&updateData)
 	if err != nil {
@@ -122,7 +175,7 @@ func (h *OrderHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Validar status válido
+	
 	validStatus := map[string]bool{
 		"pending": true, "pickup": true, "in_coming": true, 
 		"arrived": true, "delivered": true,
@@ -132,25 +185,7 @@ func (h *OrderHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Obtener la orden actual para verificar permisos
-	var currentOrder models.Order
-	err = h.DB.QueryRow("SELECT user_id, delivery_id FROM orders WHERE id = ?", id).
-		Scan(&currentOrder.UserID, &currentOrder.DeliveryID)
-	if err != nil {
-		http.Error(w, "Orden no encontrada", http.StatusNotFound)
-		return
-	}
-
-	// Verificar permisos (solo el repartidor asignado puede actualizar)
-	userId := r.Context().Value("user_id").(int)
-	role := r.Context().Value("user_role").(string)
-
-	if role != "delivery" || (currentOrder.DeliveryID != nil && *currentOrder.DeliveryID != userId) {
-		http.Error(w, "No tiene permiso para actualizar esta orden", http.StatusForbidden)
-		return
-	}
-
-	// Actualizar status
+	
 	_, err = h.DB.Exec(
 		"UPDATE orders SET status = ?, updated_at = ? WHERE id = ?",
 		updateData.Status, time.Now(), id,
@@ -160,7 +195,7 @@ func (h *OrderHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Obtener la orden actualizada para notificar
+	
 	var updatedOrder models.Order
 	err = h.DB.QueryRow(`
 		SELECT id, title, description, status, establishmentName, 
@@ -173,7 +208,6 @@ func (h *OrderHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request)
 		&updatedOrder.CreatedAt, &updatedOrder.UpdatedAt)
 
 	if err == nil {
-		// Notificar al cliente sobre el cambio de estado
 		h.SSEManager.NotifyOrderUpdate(&updatedOrder)
 	}
 
@@ -198,7 +232,7 @@ func (h *OrderHandler) AssignDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verificar que el delivery exista y sea repartidor
+	// Verificar que el delivery exista
 	var role string
 	err = h.DB.QueryRow("SELECT role FROM users WHERE id = ?", assignData.DeliveryID).Scan(&role)
 	if err != nil || role != "delivery" {
@@ -206,7 +240,7 @@ func (h *OrderHandler) AssignDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Asignar repartidor y cambiar status a "pickup"
+	// Asignar repartidor
 	_, err = h.DB.Exec(
 		"UPDATE orders SET delivery_id = ?, status = 'pickup', updated_at = ? WHERE id = ?",
 		assignData.DeliveryID, time.Now(), id,
@@ -216,7 +250,7 @@ func (h *OrderHandler) AssignDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Obtener orden actualizada
+	
 	var updatedOrder models.Order
 	err = h.DB.QueryRow(`
 		SELECT id, title, description, status, establishmentName, 
@@ -229,57 +263,11 @@ func (h *OrderHandler) AssignDelivery(w http.ResponseWriter, r *http.Request) {
 		&updatedOrder.CreatedAt, &updatedOrder.UpdatedAt)
 
 	if err == nil {
-		// Notificar a ambos sobre la asignación
 		h.SSEManager.NotifyOrderUpdate(&updatedOrder)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updatedOrder)
-}
-
-func (h *OrderHandler) GetUserOrders(w http.ResponseWriter, r *http.Request) {
-	userId := r.Context().Value("user_id").(int)
-	role := r.Context().Value("user_role").(string)
-
-	var rows *sql.Rows
-	var err error
-
-	if role == "customer" {
-		// Cliente ve sus órdenes
-		rows, err = h.DB.Query(`
-			SELECT id, title, description, status, establishmentName, 
-				   establishmentAddress, price, user_id, delivery_id, created_at, updated_at 
-			FROM orders WHERE user_id = ? ORDER BY created_at DESC`, userId)
-	} else {
-		// Repartidor ve órdenes asignadas o disponibles
-		rows, err = h.DB.Query(`
-			SELECT id, title, description, status, establishmentName, 
-				   establishmentAddress, price, user_id, delivery_id, created_at, updated_at 
-			FROM orders WHERE delivery_id = ? OR (delivery_id IS NULL AND status = 'pending')
-			ORDER BY created_at DESC`, userId)
-	}
-
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	var orders []models.Order
-	for rows.Next() {
-		var order models.Order
-		err := rows.Scan(&order.ID, &order.Title, &order.Description, &order.Status,
-			&order.EstablishmentName, &order.EstablishmentAddr, &order.Price,
-			&order.UserID, &order.DeliveryID, &order.CreatedAt, &order.UpdatedAt)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		orders = append(orders, order)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(orders)
 }
 
 func (h *OrderHandler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
@@ -290,11 +278,22 @@ func (h *OrderHandler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Solo el admin o el cliente que creó la orden puede eliminarla (pendiente)
+	
+	var order models.Order
+	h.DB.QueryRow("SELECT user_id, delivery_id FROM orders WHERE id = ?", id).Scan(&order.UserID, &order.DeliveryID)
+
 	_, err = h.DB.Exec("DELETE FROM orders WHERE id = ?", id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	
+	if order.UserID != 0 {
+		h.SSEManager.NotifyUser(order.UserID, "order_deleted", map[string]int{"id": id})
+	}
+	if order.DeliveryID != nil {
+		h.SSEManager.NotifyUser(*order.DeliveryID, "order_deleted", map[string]int{"id": id})
 	}
 
 	w.WriteHeader(http.StatusNoContent)
