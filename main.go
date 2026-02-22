@@ -19,9 +19,7 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	log.Println("=== INICIANDO DELIVERY SERVICE CON MYSQL ===")
 
-	// Configuración de MySQL con las credenciales "adri:1234"
-	// Formato: "usuario:contraseña@protocolo(host:puerto)/nombre_db?parseTime=true"
-	dsn := "adri:1234@tcp(127.0.0.1:3306)/?charset=utf8mb4&parseTime=True&loc=Local"
+	dsn := "adri:1234@tcp(127.0.0.1:3306)/DeliveryService?charset=utf8mb4&parseTime=True&loc=Local"
 	
 	// Primera conexión (sin base de datos específica para crearla si no existe)
 	db, err := sql.Open("mysql", dsn)
