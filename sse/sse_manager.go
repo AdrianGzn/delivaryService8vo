@@ -25,7 +25,7 @@ func NewSSEManager() *SSEManager {
 func (m *SSEManager) RegisterClient(userId int) chan []byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	ch := make(chan []byte, 10)
 	m.clients[userId] = ch
 	log.Printf("Cliente %d registrado para SSE", userId)
@@ -35,7 +35,7 @@ func (m *SSEManager) RegisterClient(userId int) chan []byte {
 func (m *SSEManager) UnregisterClient(userId int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	if ch, exists := m.clients[userId]; exists {
 		close(ch)
 		delete(m.clients, userId)
@@ -77,18 +77,17 @@ func (m *SSEManager) NotifyUser(userId int, event string, data interface{}) erro
 
 func (m *SSEManager) NotifyOrderUpdate(order *models.Order) {
 	m.NotifyUser(order.UserID, "order_update", order)
-	
-	
+
 	if order.DeliveryID != nil {
 		m.NotifyUser(*order.DeliveryID, "order_update", order)
 	}
-	
+
 }
 
 func (m *SSEManager) Broadcast(event string, data interface{}) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	message := struct {
 		Event string      `json:"event"`
 		Data  interface{} `json:"data"`
@@ -96,9 +95,9 @@ func (m *SSEManager) Broadcast(event string, data interface{}) {
 		Event: event,
 		Data:  data,
 	}
-	
+
 	jsonData, _ := json.Marshal(message)
-	
+
 	for userId, ch := range m.clients {
 		select {
 		case ch <- jsonData:
@@ -109,21 +108,19 @@ func (m *SSEManager) Broadcast(event string, data interface{}) {
 	}
 }
 
-
 func (m *SSEManager) SSEHandler(w http.ResponseWriter, r *http.Request) {
 	userIdStr := r.URL.Query().Get("userId")
 	if userIdStr == "" {
 		http.Error(w, "Se requiere userId en la query string", http.StatusBadRequest)
 		return
 	}
-	
+
 	userId, err := strconv.Atoi(userIdStr)
 	if err != nil {
 		http.Error(w, "userId debe ser un número válido", http.StatusBadRequest)
 		return
 	}
 
-	
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -132,7 +129,6 @@ func (m *SSEManager) SSEHandler(w http.ResponseWriter, r *http.Request) {
 	ch := m.RegisterClient(userId)
 	defer m.UnregisterClient(userId)
 
-	
 	fmt.Fprintf(w, "event: connected\ndata: {\"userId\":%d,\"message\":\"Conectado al servicio de notificaciones\"}\n\n", userId)
 	w.(http.Flusher).Flush()
 
