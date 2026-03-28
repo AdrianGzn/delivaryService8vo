@@ -66,6 +66,7 @@ func main() {
 	orderHandler := &handlers.OrderHandler{DB: db, WebSocketManager: wsManager}
 	loginHandler := &handlers.LoginHandler{DB: db}
 	wsHandler := &handlers.WebSocketHandler{WebSocketManager: wsManager}
+	foodHandler := &handlers.FoodHandler{DB: db}
 
 	// Configurar router
 	log.Println("Configurando rutas...")
@@ -125,6 +126,14 @@ func main() {
 	api.HandleFunc("/orders/{id}/assign", orderHandler.AssignDelivery).Methods("POST", "OPTIONS")
 	api.HandleFunc("/orders/{id}", orderHandler.DeleteOrder).Methods("DELETE", "OPTIONS")
 
+	// Food routes
+	api.HandleFunc("/food", foodHandler.CreateFood).Methods("POST", "OPTIONS")
+	api.HandleFunc("/food", foodHandler.GetAllFood).Methods("GET", "OPTIONS")
+	api.HandleFunc("/food/{id}", foodHandler.GetFood).Methods("GET", "OPTIONS")
+	api.HandleFunc("/food/seller/{sellerId}", foodHandler.GetSellerFood).Methods("GET", "OPTIONS")
+	api.HandleFunc("/food/{id}", foodHandler.UpdateFood).Methods("PUT", "OPTIONS")
+	api.HandleFunc("/food/{id}", foodHandler.DeleteFood).Methods("DELETE", "OPTIONS")
+
 	// Iniciar servidor
 	port := ":8080"
 	log.Printf("🚀 Servidor corriendo en http://localhost%s", port)
@@ -135,10 +144,22 @@ func main() {
 	log.Println("   - GET   /ws/status")
 	log.Println("   - GET   /health")
 	log.Println("   - GET   /api/users")
+	log.Println("   - POST  /api/users")
+	log.Println("   - PUT   /api/users/{id}")
+	log.Println("   - DELETE /api/users/{id}")
+	log.Println("   - GET   /api/orders")
 	log.Println("   - POST  /api/orders")
+	log.Println("   - GET   /api/orders/{id}")
 	log.Println("   - GET   /api/orders/user/{userId}")
 	log.Println("   - PATCH /api/orders/{id}/status")
 	log.Println("   - POST  /api/orders/{id}/assign")
+	log.Println("   - DELETE /api/orders/{id}")
+	log.Println("   - GET   /api/food")
+	log.Println("   - POST  /api/food")
+	log.Println("   - GET   /api/food/{id}")
+	log.Println("   - GET   /api/food/seller/{sellerId}")
+	log.Println("   - PUT   /api/food/{id}")
+	log.Println("   - DELETE /api/food/{id}")
 	log.Println("Presiona Ctrl+C para detener el servidor")
 
 	log.Fatal(http.ListenAndServe(port, r))
