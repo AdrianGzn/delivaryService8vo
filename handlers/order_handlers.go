@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"deliveryService/models"
-	"deliveryService/sse"
+	"deliveryService/websocket"
+
 	"github.com/gorilla/mux"
 )
 
 type OrderHandler struct {
-	DB        *sql.DB
-	SSEManager *sse.SSEManager
+	DB               *sql.DB
+	WebSocketManager *websocket.WebSocketManager
 }
 
 func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
@@ -25,13 +26,11 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	
-	if order.Title == "" || order.Description == "" || order.EstablishmentName == "" {
+	if order.Title == "" || order.Description == "" || order.SellerID == 0 {
 		http.Error(w, "Faltan campos requeridos", http.StatusBadRequest)
 		return
 	}
 
-	
 	if order.UserID == 0 {
 		order.UserID = 1
 	}
@@ -41,11 +40,9 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	order.UpdatedAt = time.Now()
 
 	result, err := h.DB.Exec(
-		`INSERT INTO orders (title, description, status, establishmentName, 
-			establishmentAddress, price, user_id, delivery_id, created_at, updated_at) 
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		order.Title, order.Description, order.Status, order.EstablishmentName,
-		order.EstablishmentAddr, order.Price, order.UserID, order.DeliveryID, 
+		`INSERT INTO orders (title, description, status, price, user_id, seller_id, delivery_id, created_at, updated_at) 
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		order.Title, order.Description, order.Status, order.Price, order.UserID, order.SellerID, order.DeliveryID,
 		order.CreatedAt, order.UpdatedAt,
 	)
 	if err != nil {
@@ -56,8 +53,8 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	id, _ := result.LastInsertId()
 	order.ID = int(id)
 
-	// Notificar al cliente
-	h.SSEManager.NotifyOrderUpdate(&order)
+	// Notificar a través de WebSocket
+	h.WebSocketManager.NotifyOrderUpdate(&order)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -66,8 +63,7 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 
 func (h *OrderHandler) GetAllOrders(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.Query(`
-		SELECT id, title, description, status, establishmentName, 
-			   establishmentAddress, price, user_id, delivery_id, created_at, updated_at 
+		SELECT id, title, description, status, price, user_id, seller_id, delivery_id, created_at, updated_at 
 		FROM orders ORDER BY created_at DESC`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -79,8 +75,7 @@ func (h *OrderHandler) GetAllOrders(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var order models.Order
 		err := rows.Scan(&order.ID, &order.Title, &order.Description, &order.Status,
-			&order.EstablishmentName, &order.EstablishmentAddr, &order.Price,
-			&order.UserID, &order.DeliveryID, &order.CreatedAt, &order.UpdatedAt)
+			&order.Price, &order.UserID, &order.SellerID, &order.DeliveryID, &order.CreatedAt, &order.UpdatedAt)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -101,8 +96,7 @@ func (h *OrderHandler) GetUserOrders(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.DB.Query(`
-		SELECT id, title, description, status, establishmentName, 
-			   establishmentAddress, price, user_id, delivery_id, created_at, updated_at 
+		SELECT id, title, description, status, price, user_id, seller_id, delivery_id, created_at, updated_at 
 		FROM orders WHERE user_id = ? OR delivery_id = ?
 		ORDER BY created_at DESC`, userId, userId)
 	if err != nil {
@@ -115,8 +109,7 @@ func (h *OrderHandler) GetUserOrders(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var order models.Order
 		err := rows.Scan(&order.ID, &order.Title, &order.Description, &order.Status,
-			&order.EstablishmentName, &order.EstablishmentAddr, &order.Price,
-			&order.UserID, &order.DeliveryID, &order.CreatedAt, &order.UpdatedAt)
+			&order.Price, &order.UserID, &order.SellerID, &order.DeliveryID, &order.CreatedAt, &order.UpdatedAt)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -138,12 +131,10 @@ func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 
 	var order models.Order
 	err = h.DB.QueryRow(`
-		SELECT id, title, description, status, establishmentName, 
-			   establishmentAddress, price, user_id, delivery_id, created_at, updated_at 
+		SELECT id, title, description, status, price, user_id, seller_id, delivery_id, created_at, updated_at 
 		FROM orders WHERE id = ?`, id,
-	).Scan(&order.ID, &order.Title, &order.Description, &order.Status, 
-		&order.EstablishmentName, &order.EstablishmentAddr, &order.Price, 
-		&order.UserID, &order.DeliveryID, &order.CreatedAt, &order.UpdatedAt)
+	).Scan(&order.ID, &order.Title, &order.Description, &order.Status,
+		&order.Price, &order.UserID, &order.SellerID, &order.DeliveryID, &order.CreatedAt, &order.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		http.Error(w, "Orden no encontrada", http.StatusNotFound)
@@ -167,7 +158,6 @@ func (h *OrderHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request)
 
 	var updateData struct {
 		Status string `json:"status"`
-		UserID int    `json:"userId"`
 	}
 	err = json.NewDecoder(r.Body).Decode(&updateData)
 	if err != nil {
@@ -175,17 +165,15 @@ func (h *OrderHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	
 	validStatus := map[string]bool{
-		"pending": true, "pickup": true, "in_coming": true, 
+		"pending": true, "pickup": true, "in_coming": true,
 		"arrived": true, "delivered": true,
 	}
 	if !validStatus[updateData.Status] {
-		http.Error(w, "Status inválido", http.StatusBadRequest)
+		http.Error(w, "Estado inválido", http.StatusBadRequest)
 		return
 	}
 
-	
 	_, err = h.DB.Exec(
 		"UPDATE orders SET status = ?, updated_at = ? WHERE id = ?",
 		updateData.Status, time.Now(), id,
@@ -195,20 +183,16 @@ func (h *OrderHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	
 	var updatedOrder models.Order
 	err = h.DB.QueryRow(`
-		SELECT id, title, description, status, establishmentName, 
-			   establishmentAddress, price, user_id, delivery_id, created_at, updated_at 
+		SELECT id, title, description, status, price, user_id, seller_id, delivery_id, created_at, updated_at 
 		FROM orders WHERE id = ?`, id,
-	).Scan(&updatedOrder.ID, &updatedOrder.Title, &updatedOrder.Description, 
-		&updatedOrder.Status, &updatedOrder.EstablishmentName, 
-		&updatedOrder.EstablishmentAddr, &updatedOrder.Price, 
-		&updatedOrder.UserID, &updatedOrder.DeliveryID, 
-		&updatedOrder.CreatedAt, &updatedOrder.UpdatedAt)
+	).Scan(&updatedOrder.ID, &updatedOrder.Title, &updatedOrder.Description,
+		&updatedOrder.Status, &updatedOrder.Price, &updatedOrder.UserID, &updatedOrder.SellerID,
+		&updatedOrder.DeliveryID, &updatedOrder.CreatedAt, &updatedOrder.UpdatedAt)
 
 	if err == nil {
-		h.SSEManager.NotifyOrderUpdate(&updatedOrder)
+		h.WebSocketManager.NotifyOrderUpdate(&updatedOrder)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -232,15 +216,13 @@ func (h *OrderHandler) AssignDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verificar que el delivery exista
 	var role string
 	err = h.DB.QueryRow("SELECT role FROM users WHERE id = ?", assignData.DeliveryID).Scan(&role)
 	if err != nil || role != "delivery" {
-		http.Error(w, "Repartidor no válido", http.StatusBadRequest)
+		http.Error(w, "Repartidor inválido", http.StatusBadRequest)
 		return
 	}
 
-	// Asignar repartidor
 	_, err = h.DB.Exec(
 		"UPDATE orders SET delivery_id = ?, status = 'pickup', updated_at = ? WHERE id = ?",
 		assignData.DeliveryID, time.Now(), id,
@@ -250,20 +232,16 @@ func (h *OrderHandler) AssignDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	
 	var updatedOrder models.Order
 	err = h.DB.QueryRow(`
-		SELECT id, title, description, status, establishmentName, 
-			   establishmentAddress, price, user_id, delivery_id, created_at, updated_at 
+		SELECT id, title, description, status, price, user_id, seller_id, delivery_id, created_at, updated_at 
 		FROM orders WHERE id = ?`, id,
-	).Scan(&updatedOrder.ID, &updatedOrder.Title, &updatedOrder.Description, 
-		&updatedOrder.Status, &updatedOrder.EstablishmentName, 
-		&updatedOrder.EstablishmentAddr, &updatedOrder.Price, 
-		&updatedOrder.UserID, &updatedOrder.DeliveryID, 
-		&updatedOrder.CreatedAt, &updatedOrder.UpdatedAt)
+	).Scan(&updatedOrder.ID, &updatedOrder.Title, &updatedOrder.Description,
+		&updatedOrder.Status, &updatedOrder.Price, &updatedOrder.UserID, &updatedOrder.SellerID,
+		&updatedOrder.DeliveryID, &updatedOrder.CreatedAt, &updatedOrder.UpdatedAt)
 
 	if err == nil {
-		h.SSEManager.NotifyOrderUpdate(&updatedOrder)
+		h.WebSocketManager.NotifyOrderUpdate(&updatedOrder)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -278,7 +256,6 @@ func (h *OrderHandler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	
 	var order models.Order
 	h.DB.QueryRow("SELECT user_id, delivery_id FROM orders WHERE id = ?", id).Scan(&order.UserID, &order.DeliveryID)
 
@@ -286,14 +263,6 @@ func (h *OrderHandler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	
-	if order.UserID != 0 {
-		h.SSEManager.NotifyUser(order.UserID, "order_deleted", map[string]int{"id": id})
-	}
-	if order.DeliveryID != nil {
-		h.SSEManager.NotifyUser(*order.DeliveryID, "order_deleted", map[string]int{"id": id})
 	}
 
 	w.WriteHeader(http.StatusNoContent)

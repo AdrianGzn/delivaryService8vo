@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"deliveryService/models"
+
 	"github.com/gorilla/mux"
 )
 
@@ -23,15 +24,25 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validar rol
-	if user.Role != "customer" && user.Role != "delivery" {
-		http.Error(w, "Rol inválido. Debe ser 'customer' o 'delivery'", http.StatusBadRequest)
+	validRoles := map[string]bool{"customer": true, "delivery": true, "seller": true}
+	if !validRoles[user.Role] {
+		http.Error(w, "Rol inválido. Debe ser 'customer', 'delivery' o 'seller'", http.StatusBadRequest)
 		return
+	}
+
+	// Validar que sellers requieren establishmentName y establishmentAddress
+	if user.Role == "seller" {
+		if user.EstablishmentName == nil || *user.EstablishmentName == "" ||
+			user.EstablishmentAddr == nil || *user.EstablishmentAddr == "" {
+			http.Error(w, "Los sellers deben proporcionar establishmentName y establishmentAddress", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// En producción, hashear el password
 	result, err := h.DB.Exec(
-		"INSERT INTO users (name, password, role, address) VALUES (?, ?, ?, ?)",
-		user.Name, user.Password, user.Role, user.Address,
+		"INSERT INTO users (name, password, role, address, establishmentName, establishmentAddress) VALUES (?, ?, ?, ?, ?, ?)",
+		user.Name, user.Password, user.Role, user.Address, user.EstablishmentName, user.EstablishmentAddr,
 	)
 	if err != nil {
 		http.Error(w, "Error al crear usuario: "+err.Error(), http.StatusInternalServerError)
@@ -57,9 +68,9 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 
 	var user models.User
 	err = h.DB.QueryRow(
-		"SELECT id, name, role, address FROM users WHERE id = ?",
+		"SELECT id, name, role, address, establishmentName, establishmentAddress FROM users WHERE id = ?",
 		id,
-	).Scan(&user.ID, &user.Name, &user.Role, &user.Address)
+	).Scan(&user.ID, &user.Name, &user.Role, &user.Address, &user.EstablishmentName, &user.EstablishmentAddr)
 
 	if err == sql.ErrNoRows {
 		http.Error(w, "Usuario no encontrado", http.StatusNotFound)
@@ -89,8 +100,8 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err = h.DB.Exec(
-		"UPDATE users SET name = ?, address = ? WHERE id = ?",
-		user.Name, user.Address, id,
+		"UPDATE users SET name = ?, address = ?, establishmentName = ?, establishmentAddress = ? WHERE id = ?",
+		user.Name, user.Address, user.EstablishmentName, user.EstablishmentAddr, id,
 	)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -121,7 +132,7 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) GetAllUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.DB.Query("SELECT id, name, role, address FROM users")
+	rows, err := h.DB.Query("SELECT id, name, role, address, establishmentName, establishmentAddress FROM users")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -131,7 +142,7 @@ func (h *UserHandler) GetAllUsers(w http.ResponseWriter, r *http.Request) {
 	var users []models.User
 	for rows.Next() {
 		var user models.User
-		err := rows.Scan(&user.ID, &user.Name, &user.Role, &user.Address)
+		err := rows.Scan(&user.ID, &user.Name, &user.Role, &user.Address, &user.EstablishmentName, &user.EstablishmentAddr)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

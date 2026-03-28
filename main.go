@@ -8,10 +8,10 @@ import (
 
 	"deliveryService/handlers"
 	"deliveryService/models"
-	"deliveryService/sse"
+	"deliveryService/websocket"
 
-	"github.com/gorilla/mux"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/mux"
 )
 
 func main() {
@@ -20,7 +20,7 @@ func main() {
 	log.Println("=== INICIANDO DELIVERY SERVICE CON MYSQL ===")
 
 	dsn := "adri:1234@tcp(100.30.88.139:3306)/DeliveryService?charset=utf8mb4&parseTime=True&loc=Local"
-	
+
 	// Primera conexión (sin base de datos específica para crearla si no existe)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -57,14 +57,15 @@ func main() {
 	}
 
 	// Inicializar componentes
-	log.Println("Inicializando SSE Manager...")
-	sseManager := sse.NewSSEManager()
+	log.Println("Inicializando WebSocket Manager...")
+	wsManager := websocket.NewWebSocketManager()
 
 	// Inicializar handlers
 	log.Println("Inicializando handlers...")
 	userHandler := &handlers.UserHandler{DB: db}
-	orderHandler := &handlers.OrderHandler{DB: db, SSEManager: sseManager}
+	orderHandler := &handlers.OrderHandler{DB: db, WebSocketManager: wsManager}
 	loginHandler := &handlers.LoginHandler{DB: db}
+	wsHandler := &handlers.WebSocketHandler{WebSocketManager: wsManager}
 
 	// Configurar router
 	log.Println("Configurando rutas...")
@@ -84,7 +85,7 @@ func main() {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			
+
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
 				return
@@ -96,8 +97,9 @@ func main() {
 	// Rutas públicas
 	r.HandleFunc("/login", loginHandler.Login).Methods("POST", "OPTIONS")
 	r.HandleFunc("/register", loginHandler.Register).Methods("POST", "OPTIONS")
-	r.HandleFunc("/sse", sseManager.SSEHandler).Methods("GET", "OPTIONS")
-	
+	r.HandleFunc("/ws/{userId}", wsHandler.HandleWebSocket).Methods("GET", "OPTIONS")
+	r.HandleFunc("/ws/status", wsHandler.GetActiveConnections).Methods("GET", "OPTIONS")
+
 	// Health check
 	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -106,7 +108,7 @@ func main() {
 
 	// API Routes
 	api := r.PathPrefix("/api").Subrouter()
-	
+
 	// User routes
 	api.HandleFunc("/users", userHandler.CreateUser).Methods("POST", "OPTIONS")
 	api.HandleFunc("/users", userHandler.GetAllUsers).Methods("GET", "OPTIONS")
@@ -129,7 +131,8 @@ func main() {
 	log.Println("📡 Endpoints disponibles:")
 	log.Println("   - POST  /login")
 	log.Println("   - POST  /register")
-	log.Println("   - GET   /sse?userId={id}")
+	log.Println("   - GET   /ws/{userId} (WebSocket)")
+	log.Println("   - GET   /ws/status")
 	log.Println("   - GET   /health")
 	log.Println("   - GET   /api/users")
 	log.Println("   - POST  /api/orders")
@@ -137,6 +140,6 @@ func main() {
 	log.Println("   - PATCH /api/orders/{id}/status")
 	log.Println("   - POST  /api/orders/{id}/assign")
 	log.Println("Presiona Ctrl+C para detener el servidor")
-	
+
 	log.Fatal(http.ListenAndServe(port, r))
 }

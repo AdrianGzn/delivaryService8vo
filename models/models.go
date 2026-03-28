@@ -6,25 +6,33 @@ import (
 )
 
 type User struct {
-	ID       int     `json:"id"`
-	Name     string  `json:"name"`
-	Password string  `json:"-"`
-	Role     string  `json:"role"` // "customer", "delivery"
-	Address  *string `json:"address,omitempty"`
+	ID                int     `json:"id"`
+	Name              string  `json:"name"`
+	Password          string  `json:"-"`
+	Role              string  `json:"role"` // "customer", "delivery", "seller"
+	Address           *string `json:"address,omitempty"`
+	EstablishmentName *string `json:"establishmentName,omitempty"`
+	EstablishmentAddr *string `json:"establishmentAddress,omitempty"`
 }
 
 type Order struct {
-	ID                int       `json:"id"`
-	Title             string    `json:"title"`
-	Description       string    `json:"description"`
-	Status            string    `json:"status"` // "pending", "pickup", "in_coming", "arrived", "delivered"
-	EstablishmentName string    `json:"establishmentName"`
-	EstablishmentAddr string    `json:"establishmentAddress"`
-	Price             float64   `json:"price"`
-	UserID            int       `json:"userId"`
-	DeliveryID        *int      `json:"deliveryId,omitempty"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	ID          int       `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Status      string    `json:"status"` // "pending", "pickup", "in_coming", "arrived", "delivered"
+	Price       float64   `json:"price"`
+	UserID      int       `json:"userId"`
+	SellerID    int       `json:"sellerId"`
+	DeliveryID  *int      `json:"deliveryId,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type Food struct {
+	ID       int     `json:"id"`
+	SellerID int     `json:"sellerId"`
+	Name     string  `json:"name"`
+	Price    float64 `json:"price"`
 }
 
 type LoginRequest struct {
@@ -43,7 +51,7 @@ func CreateTables(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	
+
 	// Usar la base de datos
 	_, err = db.Exec("USE DeliveryService")
 	if err != nil {
@@ -56,8 +64,10 @@ func CreateTables(db *sql.DB) error {
 		id INT AUTO_INCREMENT PRIMARY KEY,
 		name VARCHAR(255) UNIQUE NOT NULL,
 		password VARCHAR(255) NOT NULL,
-		role ENUM('customer', 'delivery') NOT NULL,
+		role ENUM('customer', 'delivery', 'seller') NOT NULL,
 		address TEXT,
+		establishmentName VARCHAR(255),
+		establishmentAddress TEXT,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
@@ -69,18 +79,32 @@ func CreateTables(db *sql.DB) error {
 		title VARCHAR(255) NOT NULL,
 		description TEXT NOT NULL,
 		status ENUM('pending', 'pickup', 'in_coming', 'arrived', 'delivered') NOT NULL,
-		establishmentName VARCHAR(255) NOT NULL,
-		establishmentAddress TEXT NOT NULL,
 		price DECIMAL(10,2) NOT NULL,
 		user_id INT NOT NULL,
+		seller_id INT NOT NULL,
 		delivery_id INT,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE,
 		FOREIGN KEY (delivery_id) REFERENCES users(id) ON DELETE SET NULL,
 		INDEX idx_user_id (user_id),
+		INDEX idx_seller_id (seller_id),
 		INDEX idx_delivery_id (delivery_id),
 		INDEX idx_status (status)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+
+	// Tabla de comidas - MySQL syntax
+	foodTable := `
+	CREATE TABLE IF NOT EXISTS food (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		seller_id INT NOT NULL,
+		name VARCHAR(255) NOT NULL,
+		price DECIMAL(10,2) NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE,
+		INDEX idx_seller_id (seller_id)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
 
 	_, err = db.Exec(userTable)
@@ -89,6 +113,11 @@ func CreateTables(db *sql.DB) error {
 	}
 
 	_, err = db.Exec(orderTable)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(foodTable)
 	return err
 }
 
@@ -102,11 +131,13 @@ func SeedDatabase(db *sql.DB) error {
 
 	if count == 0 {
 		_, err = db.Exec(`
-			INSERT INTO users (name, password, role, address) VALUES 
-			('cliente1', '123456', 'customer', 'Calle Cliente 123'),
-			('cliente2', '123456', 'customer', 'Calle Cliente 456'),
-			('repartidor1', '123456', 'delivery', NULL),
-			('repartidor2', '123456', 'delivery', NULL)
+			INSERT INTO users (name, password, role, address, establishmentName, establishmentAddress) VALUES 
+			('cliente1', '123456', 'customer', 'Calle Cliente 123', NULL, NULL),
+			('cliente2', '123456', 'customer', 'Calle Cliente 456', NULL, NULL),
+			('repartidor1', '123456', 'delivery', NULL, NULL, NULL),
+			('repartidor2', '123456', 'delivery', NULL, NULL, NULL),
+			('vendedor1', '123456', 'seller', NULL, 'Local Comidas', 'Avenida Principal 123'),
+			('vendedor2', '123456', 'seller', NULL, 'Restaurante Delta', 'Calle Secundaria 456')
 		`)
 		if err != nil {
 			return err
