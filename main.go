@@ -134,6 +134,11 @@ func main() {
 	api.HandleFunc("/food/{id}", foodHandler.UpdateFood).Methods("PUT", "OPTIONS")
 	api.HandleFunc("/food/{id}", foodHandler.DeleteFood).Methods("DELETE", "OPTIONS")
 
+	// Order Items routes
+	api.HandleFunc("/orders/{orderId}/items", orderHandler.GetOrderItems).Methods("GET", "OPTIONS")
+	api.HandleFunc("/orders/{orderId}/items", orderHandler.AddOrderItem).Methods("POST", "OPTIONS")
+	api.HandleFunc("/orders/{orderId}/items/{itemId}", orderHandler.RemoveOrderItem).Methods("DELETE", "OPTIONS")
+
 	// Iniciar servidor
 	port := ":8080"
 	log.Printf("🚀 Servidor corriendo en http://localhost%s", port)
@@ -160,6 +165,9 @@ func main() {
 	log.Println("   - GET   /api/food/seller/{sellerId}")
 	log.Println("   - PUT   /api/food/{id}")
 	log.Println("   - DELETE /api/food/{id}")
+	log.Println("   - GET   /api/orders/{orderId}/items")
+	log.Println("   - POST  /api/orders/{orderId}/items")
+	log.Println("   - DELETE /api/orders/{orderId}/items/{itemId}")
 	log.Println("Presiona Ctrl+C para detener el servidor")
 
 	log.Fatal(http.ListenAndServe(port, r))

@@ -35,6 +35,29 @@ type Food struct {
 	Price    float64 `json:"price"`
 }
 
+type OrderItem struct {
+	ID       int     `json:"id"`
+	OrderID  int     `json:"orderId"`
+	FoodID   int     `json:"foodId"`
+	FoodName string  `json:"foodName"`
+	Quantity int     `json:"quantity"`
+	Price    float64 `json:"price"` // Precio al momento de la compra
+}
+
+type OrderDetail struct {
+	Order Order       `json:"order"`
+	Items []OrderItem `json:"items"`
+}
+
+type CreateOrderRequest struct {
+	UserID   int `json:"userId"`
+	SellerID int `json:"sellerId"`
+	Items    []struct {
+		FoodID   int `json:"foodId"`
+		Quantity int `json:"quantity"`
+	} `json:"items"`
+}
+
 type LoginRequest struct {
 	Name     string `json:"name"`
 	Password string `json:"password"`
@@ -107,6 +130,21 @@ func CreateTables(db *sql.DB) error {
 		INDEX idx_seller_id (seller_id)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
 
+	// Tabla de items de órdenes
+	orderItemsTable := `
+	CREATE TABLE IF NOT EXISTS order_items (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		order_id INT NOT NULL,
+		food_id INT NOT NULL,
+		quantity INT NOT NULL DEFAULT 1,
+		price DECIMAL(10,2) NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+		FOREIGN KEY (food_id) REFERENCES food(id) ON DELETE CASCADE,
+		INDEX idx_order_id (order_id),
+		INDEX idx_food_id (food_id)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+
 	_, err = db.Exec(userTable)
 	if err != nil {
 		return err
@@ -118,6 +156,11 @@ func CreateTables(db *sql.DB) error {
 	}
 
 	_, err = db.Exec(foodTable)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(orderItemsTable)
 	return err
 }
 
