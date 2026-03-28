@@ -26,7 +26,6 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validar que haya al menos 1 item
 	if len(req.Items) == 0 {
 		http.Error(w, "Debe incluir al menos 1 item de comida", http.StatusBadRequest)
 		return
@@ -41,7 +40,6 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		req.UserID = 1
 	}
 
-	// Calcular precio total y validar que los alimentos existan y pertenezcan al vendedor
 	var totalPrice float64
 	for _, item := range req.Items {
 		var foodPrice float64
@@ -68,7 +66,6 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		totalPrice += foodPrice * float64(item.Quantity)
 	}
 
-	// Crear la orden
 	order := models.Order{
 		Title:       "Orden de comida",
 		Description: "Orden de múltiples items",
@@ -94,7 +91,6 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	orderId, _ := result.LastInsertId()
 	order.ID = int(orderId)
 
-	// Insertar los items de la orden
 	var items []models.OrderItem
 	for _, item := range req.Items {
 		var foodName string
@@ -125,10 +121,8 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Notificar a través de WebSocket
 	h.WebSocketManager.NotifyOrderUpdate(&order)
 
-	// Devolver orden con items
 	orderDetail := models.OrderDetail{
 		Order: order,
 		Items: items,
@@ -222,8 +216,36 @@ func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rows, err := h.DB.Query(`
+		SELECT oi.id, oi.order_id, oi.food_id, f.name, oi.quantity, oi.price 
+		FROM order_items oi
+		JOIN food f ON oi.food_id = f.id
+		WHERE oi.order_id = ?
+		ORDER BY oi.created_at DESC`, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var items []models.OrderItem
+	for rows.Next() {
+		var item models.OrderItem
+		err := rows.Scan(&item.ID, &item.OrderID, &item.FoodID, &item.FoodName, &item.Quantity, &item.Price)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		items = append(items, item)
+	}
+
+	orderDetail := models.OrderDetail{
+		Order: order,
+		Items: items,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(order)
+	json.NewEncoder(w).Encode(orderDetail)
 }
 
 func (h *OrderHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request) {
@@ -334,9 +356,6 @@ func (h *OrderHandler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var order models.Order
-	h.DB.QueryRow("SELECT user_id, delivery_id FROM orders WHERE id = ?", id).Scan(&order.UserID, &order.DeliveryID)
-
 	_, err = h.DB.Exec("DELETE FROM orders WHERE id = ?", id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -346,7 +365,6 @@ func (h *OrderHandler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Obtener los items de una orden
 func (h *OrderHandler) GetOrderItems(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	orderId, err := strconv.Atoi(vars["orderId"])
@@ -382,7 +400,6 @@ func (h *OrderHandler) GetOrderItems(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(items)
 }
 
-// Agregar un item a una orden existente
 func (h *OrderHandler) AddOrderItem(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	orderId, err := strconv.Atoi(vars["orderId"])
@@ -406,15 +423,13 @@ func (h *OrderHandler) AddOrderItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verifica que la orden existe
-	var ordeSellerId int
-	err = h.DB.QueryRow("SELECT seller_id FROM orders WHERE id = ?", orderId).Scan(&ordeSellerId)
+	var orderSellerId int
+	err = h.DB.QueryRow("SELECT seller_id FROM orders WHERE id = ?", orderId).Scan(&orderSellerId)
 	if err == sql.ErrNoRows {
 		http.Error(w, "Orden no encontrada", http.StatusNotFound)
 		return
 	}
 
-	// Obtener información del alimento
 	var foodName string
 	var foodPrice float64
 	var foodSellerId int
@@ -432,13 +447,11 @@ func (h *OrderHandler) AddOrderItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verifica que el alimento pertenece al mismo vendedor
-	if foodSellerId != ordeSellerId {
+	if foodSellerId != orderSellerId {
 		http.Error(w, "El alimento no pertenece a este vendedor", http.StatusBadRequest)
 		return
 	}
 
-	// Insertar el item
 	result, err := h.DB.Exec(
 		`INSERT INTO order_items (order_id, food_id, quantity, price) VALUES (?, ?, ?, ?)`,
 		orderId, req.FoodID, req.Quantity, foodPrice,
@@ -458,7 +471,6 @@ func (h *OrderHandler) AddOrderItem(w http.ResponseWriter, r *http.Request) {
 		Price:    foodPrice,
 	}
 
-	// Actualizar el precio total de la orden
 	var newTotal float64
 	err = h.DB.QueryRow(
 		"SELECT SUM(quantity * price) FROM order_items WHERE order_id = ?",
@@ -474,7 +486,6 @@ func (h *OrderHandler) AddOrderItem(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(item)
 }
 
-// Remover un item de una orden
 func (h *OrderHandler) RemoveOrderItem(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	orderId, err := strconv.Atoi(vars["orderId"])
@@ -485,7 +496,6 @@ func (h *OrderHandler) RemoveOrderItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verifica que el item existe y pertenece a la orden
 	var exists int
 	err = h.DB.QueryRow("SELECT 1 FROM order_items WHERE id = ? AND order_id = ?", itemId, orderId).Scan(&exists)
 	if err == sql.ErrNoRows {
@@ -493,14 +503,12 @@ func (h *OrderHandler) RemoveOrderItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Eliminar el item
 	_, err = h.DB.Exec("DELETE FROM order_items WHERE id = ? AND order_id = ?", itemId, orderId)
 	if err != nil {
 		http.Error(w, "Error al remover item: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Actualizar el precio total de la orden
 	var newTotal sql.NullFloat64
 	err = h.DB.QueryRow(
 		"SELECT SUM(quantity * price) FROM order_items WHERE order_id = ?",
@@ -511,7 +519,6 @@ func (h *OrderHandler) RemoveOrderItem(w http.ResponseWriter, r *http.Request) {
 		if newTotal.Valid {
 			h.DB.Exec("UPDATE orders SET price = ?, updated_at = ? WHERE id = ?", newTotal.Float64, time.Now(), orderId)
 		} else {
-			// Si no hay items, establecer el precio a 0
 			h.DB.Exec("UPDATE orders SET price = 0, updated_at = ? WHERE id = ?", time.Now(), orderId)
 		}
 	}
