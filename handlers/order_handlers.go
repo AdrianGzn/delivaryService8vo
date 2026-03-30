@@ -91,6 +91,18 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	orderId, _ := result.LastInsertId()
 	order.ID = int(orderId)
 
+	// 🔹 OBTENER LA ORDEN COMPLETA DESPUÉS DE CREARLA
+	err = h.DB.QueryRow(`
+		SELECT id, title, description, status, price, user_id, seller_id, delivery_id, created_at, updated_at 
+		FROM orders WHERE id = ?`, orderId,
+	).Scan(&order.ID, &order.Title, &order.Description, &order.Status,
+		&order.Price, &order.UserID, &order.SellerID, &order.DeliveryID, &order.CreatedAt, &order.UpdatedAt)
+
+	if err != nil {
+		http.Error(w, "Error al obtener orden creada: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	var items []models.OrderItem
 	for _, item := range req.Items {
 		var foodName string

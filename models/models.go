@@ -10,9 +10,9 @@ type User struct {
 	Name              string  `json:"name"`
 	Password          string  `json:"-"`
 	Role              string  `json:"role"` // "customer", "delivery", "seller"
-	Address           *string `json:"address,omitempty"`
-	EstablishmentName *string `json:"establishmentName,omitempty"`
-	EstablishmentAddr *string `json:"establishmentAddress,omitempty"`
+	Address           *string `json:"address"`
+	EstablishmentName *string `json:"establishmentName"`
+	EstablishmentAddr *string `json:"establishmentAddress"`
 }
 
 type Order struct {
@@ -23,7 +23,7 @@ type Order struct {
 	Price       float64   `json:"price"`
 	UserID      int       `json:"userId"`
 	SellerID    int       `json:"sellerId"`
-	DeliveryID  *int      `json:"deliveryId,omitempty"`
+	DeliveryID  *int      `json:"deliveryId"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
