@@ -99,13 +99,8 @@ func (m *WebSocketManager) NotifyUser(userId int, event string, data interface{}
 
 // NotifyOrderUpdate notifica a los usuarios relacionados con una orden
 func (m *WebSocketManager) NotifyOrderUpdate(order *models.Order) {
-	m.NotifyUser(order.UserID, "order_update", order)
-
-	if order.DeliveryID != nil {
-		m.NotifyUser(*order.DeliveryID, "order_update", order)
-	}
-
-	m.NotifyUser(order.SellerID, "order_update", order)
+	// Notificamos globalmente para que los repartidores puedan ver los nuevos pedidos
+	m.Broadcast("order_update", order)
 }
 
 // Broadcast envía un mensaje a todos los usuarios conectados
